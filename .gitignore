@@ -1,0 +1,6 @@
+credentials
+token.json
+credentials.json
+node_modules/*
+*.code-workspace
+.DS_Store

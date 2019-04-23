@@ -1,0 +1,23 @@
+{
+  "name": "mailchimp-project",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "dependencies": {
+    "email-addresses": "^3.0.3",
+    "googleapis": "^27.0.0",
+    "mailchimp-api-v3": "^1.13.0",
+    "mailparser-mit": "^1.0.0",
+    "mailparser": "^2.6.0"
+  },
+  "devDependencies": {},
+  "scripts": {
+    "test": "node ."
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://git.heroku.com/mailchimp-email-automator.git"
+  },
+  "author": "me",
+  "license": "UNLICENSED"
+}
