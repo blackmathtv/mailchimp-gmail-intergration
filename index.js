@@ -1,10 +1,16 @@
 const fs = require('fs');
 const readline = require('readline');
-const {google} = require('googleapis');
+const { google } = require('googleapis');
 var Mailchimp = require('mailchimp-api-v3')
 var addrs = require("email-addresses")
 
+require('dotenv').config()
+
 var mailchimp = new Mailchimp(process.env.mailchimpAPI);
+
+// +===========================================+
+// |        BEGIN GMAIL AUTH BOILERPLATE       |
+// +===========================================+
 
 // If modifying these scopes, delete token.json.
 const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.googleapis.com/auth/gmail.modify'];
@@ -18,7 +24,7 @@ fs.readFile('credentials.json', (err, content) => {
   if (err) return console.log('Error loading client secret file:', err);
   // Authorize a client with credentials, then call the Gmail API.
   // authorize(JSON.parse(content), listLabels);
-  authorize(JSON.parse(content), readMessage);
+  authorize(JSON.parse(content), scanMailForAddresses);
 });
 
 /**
@@ -28,9 +34,9 @@ fs.readFile('credentials.json', (err, content) => {
  * @param {function} callback The callback to call with the authorized client.
  */
 function authorize(credentials, callback) {
-  const {client_secret, client_id, redirect_uris} = credentials.installed;
+  const { client_secret, client_id, redirect_uris } = credentials.installed;
   const oAuth2Client = new google.auth.OAuth2(
-      client_id, client_secret, redirect_uris[0]);
+    client_id, client_secret, redirect_uris[0]);
 
   // Check if we have previously stored a token.
   fs.readFile(TOKEN_PATH, (err, token) => {
@@ -71,162 +77,192 @@ function getNewToken(oAuth2Client, callback) {
   });
 }
 
-/**
- * Lists the labels in the user's account.
- *
- * @param {google.auth.OAuth2} auth An authorized OAuth2 client.
- */
-function listLabels(auth) {
-  const gmail = google.gmail({version: 'v1', auth});
-  gmail.users.labels.list({
+// +===========================================+
+// |        END GMAIL AUTH BOILERPLATE         |
+// +===========================================+
+
+function scanMailForAddresses(auth) {
+  const gmail = google.gmail({ version: 'v1', auth });
+
+  //make request to get list of the ids of all of the email in inbox
+  gmail.users.messages.list({
     userId: 'me',
-  }, (err, res) => {
+  }, (err, messageListResponse) => {
     if (err) return console.log('The API returned an error: ' + err);
-    const labels = res.data.labels;
-    if (labels.length) {
-      console.log('Labels:');
-      labels.forEach((label) => {
-        console.log(`- ${label.name}`);
+    if (messageListResponse.data.messages) {
+
+      //Make request for each email in inbox
+      messageListResponse.data.messages.forEach((message) => {
+        gmail.users.messages.get({
+          userId: 'me',
+          id: message.id
+        },
+          (err, messageResponse) => {
+            if (err) return console.log('The API returned an error: ' + err);
+
+            searchEmailForAddresses(messageResponse,
+              function (emailList) {
+                
+                //parse addresses and full names into array of objects 
+                parseAddresses(emailList,
+                  function (people) {
+
+                    //add every account in array of object to mailchimp 
+                    addListToMailchimp(people)
+                  }
+                )
+              }
+            )
+            sendMailToTrashOption(messageResponse, auth)
+          });
       });
-    } else {
-      console.log('No labels found.');
     }
   });
 }
 
-function readMessage(auth) {
-  const gmail = google.gmail({version: 'v1', auth});
-  gmail.users.messages.list({
-    userId: 'me',
-  }, (err, res) => {
-    if (err) return console.log('The API returned an error: ' + err);
-    if (res.data.messages) res.data.messages.forEach((message) => {
+function searchEmailForAddresses(messageResponse, callback) {
+  //get the email's content
+  var payload = messageResponse.data.payload;
+  //reading through multipart messages
+  var messageBody = '';
+  if (payload.parts) {
+    messageBody += Buffer.from(payload.parts[0].body.data, 'base64').toString('utf8');
+  }
+  //reading through singlepart messages
+  else {
+    messageBody += Buffer.from(payload.body.data, 'base64').toString('utf8');
+  }
 
-      gmail.users.messages.get({
-        userId: 'me',
-        id: message.id
-      }, (err, res2) => {
-        if (err) return console.log('The API returned an error: ' + err);
-        var payload = res2.data.payload;
-        //reading through multipart messages
-        var messageBody = '';
-        if(payload.parts) {
-          // payload.parts.forEach((part) => {
-            messageBody += Buffer.from(payload.parts[0].body.data, 'base64').toString('utf8');
-          // })
-        }
-        //reading through singlepart messages
-        else{
-          // console.log(payload.body.data);
-          messageBody += Buffer.from(payload.body.data, 'base64').toString('utf8');
-        }
+  //remove all unneeded whitespace
+  messageBody = messageBody.replace(/(\r\n|\n|\r)/gm, " ");
 
-        // var messageBody = Buffer.from(res2.data.payload.parts[0].body.data, 'base64').toString('utf8');
-        messageBody = messageBody.replace(/(\r\n|\n|\r)/gm, " ");
-        // console.log(messageBody);
-        var emailList = [];
-        var list1 = messageBody.match(/(?<=(>,|> ,|To: |From: |Cc: ))(.*?)>/gm);
-        if(list1) emailList = list1;
-        var list2 = messageBody.match(/([a-zA-Z0-9_.-]*@.*\.[a-zA-Z0-9_.-]*)/g);
-        if(list2) emailList.concat(list2);
-        // if (err) return console.log('The API returned an error: ' + err);
-        
-        //reading through To, From, and Cc Headers
-        var headers = res2.data.payload.headers;
-        headers.forEach((header) => {
-          if(header.name == 'From' || header.name == 'Cc' || header.name == 'To'){
-            emailList.push(header.value);
-          }
-        })
-        parseNamesAndAdd(emailList.join());
-      });
-    });
-  });
+  var emailList = [];
+
+  //parse all email addressses from the email chain's To, From, and Cc feilds
+  var list1 = messageBody.match(/(?<=(>,|> ,|To: |From: |Cc: ))(.*?)>/gm);
+  if (list1) emailList.concat(list1);
+
+  //parse any other email addresses found in the email
+  var list2 = messageBody.match(/([a-zA-Z0-9._-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9_-]+)/g);
+  if (list2) emailList = emailList.concat(list2);
+
+  //reading through To, From, and Cc Headers of the email
+  var headers = messageResponse.data.payload.headers;
+  headers.forEach((header) => {
+    if (header.name == 'From' || header.name == 'Cc' || header.name == 'To') {
+      emailList.push(header.value);
+    }
+    if (header.name == 'Subject') {
+      console.log('\x1b[33mSubject: ' + header.value + '\x1b[0m');
+    }
+  })
+  emailList = emailList.join();
+
+  // console.log('\x1b[32m'+messageBody+ '\x1b[0m');
+  // console.log(emailList);
+
+  callback(emailList);
 }
 
-function parseNamesAndAdd(nameList){
+function parseAddresses(nameList, callback) {
   var addressses = addrs.parseAddressList(nameList);
-  if(addressses != null){
+  if (addressses != null) {
     var people = [];
-    for(var i = 0; i < addressses.length; i++){
+    for (var i = 0; i < addressses.length; i++) {
       var address = addressses[i];
-      if(address != null){
+      if (address != null) {
         var email = address.address;
         var firstName = '';
         var lastName = '';
-        if(address.name != null) {
-          var fullName = address.name;  
-          if(fullName.split(" ")[0]) firstName = fullName.split(" ")[0];
-          if(fullName.split(" ")[1]) lastName = fullName.split(" ")[1];       
+        if (address.name != null) {
+          var fullName = address.name;
+          if (fullName.split(" ")[0]) firstName = fullName.split(" ")[0];
+          if (fullName.split(" ")[1]) lastName = fullName.split(" ")[1];
         }
         else {
           firstName = address.local;
         }
-        var person = {email: email, firstName: firstName, lastName: lastName};
+        if (email) {
+          // console.log(email)
+          var person = { email: email, firstName: firstName, lastName: lastName };
+        }
         people.push(person)
       }
     }
-    // console.log(people);
-    addMemberRecursive(people);
+    callback(people);
   }
-  else{
+  else {
     console.log("list was null :/");
   }
 }
 
-function addMember(email, firstName, lastName, callback, error){
-  mailchimp.post('/lists/'+process.env.mailchimpListID+'/members', {
-    email_address: email,
-    status: "subscribed",
-    merge_fields:{
-      FNAME: firstName,
-      LNAME: lastName
+function addListToMailchimp(people) {
+  try {
+    var person = people.pop();
+
+    if (person !== null && person.email !== null) {
+      var email = person.email;
+
+      if (person.firstName !== null) {
+        var firstName = person.firstName;
+      }
+      else {
+        var firstName = ' ';
+      }
+
+      if (person.lastName !== null) {
+        var lastName = person.lastName;
+      }
+      else {
+        var lastName = ' ';
+      }
+
+      mailchimp.post('/lists/' + process.env.mailchimpListID + '/members', {
+        email_address: email,
+        status: "subscribed",
+        merge_fields: {
+          FNAME: firstName,
+          LNAME: lastName
+        }
+      })
+        .then(function (result) {
+          console.log('\x1b[36m' + email + ' was added successfully' + "\x1b[0m");
+          addListToMailchimp(people);
+        })
+        .catch(function (err) {
+          if (err.status == 400) console.log("\x1b[33m" + email + ' was already added' + "\x1b[0m")
+          else console.log(err);
+          addListToMailchimp(people);
+        })
     }
-  })
-  .then(function (result) {
-    callback(result);
-  })
-  .catch(function (err) {
-    error(err);
-  })
-}
-
-function addMemberRecursive(people){
-  var person = people.pop();
-
-  // console.log(person);
-
-  var email = person.email;
-  var firstName = person.firstName;
-  var lastName = person.lastName;
-
-  mailchimp.post('/lists/'+process.env.mailchimpListID+'/members', {
-    email_address: email,
-    status: "subscribed",
-    merge_fields:{
-      FNAME: firstName,
-      LNAME: lastName
+    else {
+      console.log('\x1b[31m Error! Email was null :/ \x1b[0m');
     }
-
-  })
-  .then(function (result) {
-    addMemberRecursive(people);
-  })
-  .catch(function (err) {
-    if(err.status == 400) console.log('member already added')
-    else console.log(err);
-    addMemberRecursive(people);
-  })
+  }
+  catch (err) {
+    // console.log('weird error');
+  }
 }
 
-if(process.env.DeleteAfter == "true"){
-  console.log('deleting after')
-  mailchimp.get('/lists/', {
-  })
-  .then(function (result) {
-    // console.log(result);
-  })
-  .catch(function (err) {
-    console.log(err);
-  })
+function sendMailToTrashOption(message, auth){
+
+  if (process.env.DeleteAfter == "true") {
+
+    const gmail = google.gmail({ version: 'v1', auth });
+    // console.log(messageResponse);
+    // console.log(message.data.id)
+    gmail.users.messages.trash(
+      {
+        userId: 'me',
+        id: (message.data.id)
+      },
+      (err, res) => 
+      {
+        if(err) console.log(err)
+        else console.log(res)
+      }
+    )
+    console.log('deleting message')
+  }
 }
+
