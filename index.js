@@ -19,13 +19,20 @@ const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.g
 // time.
 const TOKEN_PATH = 'token.json';
 
-// Load client secrets from a local file.
-fs.readFile('credentials.json', (err, content) => {
-  if (err) return console.log('Error loading client secret file:', err);
-  // Authorize a client with credentials, then call the Gmail API.
-  // authorize(JSON.parse(content), listLabels);
-  authorize(JSON.parse(content), scanMailForAddresses);
-});
+if(process.env.envMode="true"){
+  console.log(JSON.parse(process.env.credentials));
+  authorize(JSON.parse(process.env.credentials), scanMailForAddresses);
+}
+else{
+  // Load client secrets from a local file.
+  fs.readFile('credentials.json', (err, content) => {
+    if (err) return console.log('Error loading client secret file:', err);
+    // Authorize a client with credentials, then call the Gmail API.
+    // authorize(JSON.parse(content), listLabels);
+    authorize(JSON.parse(content), scanMailForAddresses);
+  });
+}
+
 
 /**
  * Create an OAuth2 client with the given credentials, and then execute the
@@ -39,11 +46,17 @@ function authorize(credentials, callback) {
     client_id, client_secret, redirect_uris[0]);
 
   // Check if we have previously stored a token.
-  fs.readFile(TOKEN_PATH, (err, token) => {
-    if (err) return getNewToken(oAuth2Client, callback);
-    oAuth2Client.setCredentials(JSON.parse(token));
+  if(process.env.envMode="true"){
+    oAuth2Client.setCredentials(JSON.parse(process.env.token));
     callback(oAuth2Client);
-  });
+  }
+  else{
+    fs.readFile(TOKEN_PATH, (err, token) => {
+      if (err) return getNewToken(oAuth2Client, callback);
+      oAuth2Client.setCredentials(JSON.parse(token));
+      callback(oAuth2Client);
+    });
+  }
 }
 
 /**
