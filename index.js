@@ -20,7 +20,6 @@ const SCOPES = ['https://www.googleapis.com/auth/gmail.readonly', 'https://www.g
 const TOKEN_PATH = 'token.json';
 
 if(process.env.envMode="true"){
-  console.log(JSON.parse(process.env.credentials));
   authorize(JSON.parse(process.env.credentials), scanMailForAddresses);
 }
 else{
