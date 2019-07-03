@@ -6,6 +6,8 @@ var addrs = require("email-addresses")
 
 require('dotenv').config()
 
+console.log('attempting to run...');
+
 var mailchimp = new Mailchimp(process.env.mailchimpAPI);
 
 // +===========================================+
@@ -81,7 +83,7 @@ function getNewToken(oAuth2Client, callback) {
       oAuth2Client.setCredentials(token);
       // Store the token to disk for later program executions
       fs.writeFile(TOKEN_PATH, JSON.stringify(token), (err) => {
-        if (err) return console.error(err);
+        if (err) return console.error('error writing file',err);
         console.log('Token stored to', TOKEN_PATH);
       });
       callback(oAuth2Client);
@@ -92,6 +94,7 @@ function getNewToken(oAuth2Client, callback) {
 // +===========================================+
 // |        END GMAIL AUTH BOILERPLATE         |
 // +===========================================+
+
 
 function scanMailForAddresses(auth) {
   const gmail = google.gmail({ version: 'v1', auth });
@@ -243,7 +246,7 @@ function addListToMailchimp(people) {
         })
         .catch(function (err) {
           if (err.status == 400) console.log("\x1b[33m" + email + ' was already added' + "\x1b[0m")
-          else console.log(err);
+          else console.log('weird other error '  + err);
           addListToMailchimp(people);
         })
     }
